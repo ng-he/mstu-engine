@@ -42,10 +42,13 @@ async fn main() -> Result<(), String> {
     log_info!("MSTU started");
 
     if env::args().any(|arg| arg == "--serve") {
-        let mut app = App::new();
-        let loaded = load_plugins(&mut app, "plugins");
+        // Plugins are built elsewhere and collected into a folder of their own.
+        let dir = env::var("MSTU_PLUGIN_DIR").unwrap_or_else(|_| "plugins".to_string());
 
-        log_info!("serving {loaded} plugin librarie(s)");
+        let mut app = App::new();
+        let loaded = load_plugins(&mut app, &dir);
+
+        log_info!("serving {loaded} plugin librarie(s) from '{dir}'");
 
         let served = rpc::serve(app).await.map_err(|error| error.to_string());
 

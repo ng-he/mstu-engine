@@ -32,7 +32,22 @@ fn plugin_dir_from(here: &Path, configured: Option<String>) -> PathBuf {
         .unwrap_or_else(|| here.join("plugins"))
 }
 
-/// Loads every plugin library in `dir`, keyed by file stem without `lib`.
+/// The name a library in the plugins folder is known by, or nothing if the
+/// file is no library of this platform's kind.
+///
+/// Cargo names it `libmstu_media_dumper.so` here and `mstu_media_dumper.dll`
+/// on Windows, and either way the plugin is `mstu-media-dumper`.
+fn plugin_key(path: &Path) -> Option<String> {
+    if path.extension()? != env::consts::DLL_EXTENSION {
+        return None;
+    }
+
+    let stem = path.file_stem()?.to_str()?;
+
+    Some(stem.strip_prefix("lib").unwrap_or(stem).replace('_', "-"))
+}
+
+/// Loads every plugin library in `dir`, keyed as `plugin_key` says.
 fn load_plugins(app: &mut App, dir: &Path) -> usize {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -50,19 +65,13 @@ fn load_plugins(app: &mut App, dir: &Path) -> usize {
     for entry in entries.flatten() {
         let path = entry.path();
 
-        if path.extension().and_then(|ext| ext.to_str()) != Some("so") {
-            continue;
-        }
-
-        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+        let Some(key) = plugin_key(&path) else {
             continue;
         };
 
-        let key = stem.strip_prefix("lib").unwrap_or(stem).replace('_', "-");
-
         match app.load(&key, &path.to_string_lossy()) {
             Ok(()) => loaded += 1,
-            // Not every .so in the folder is a plugin.
+            // Not every library in the folder is a plugin.
             Err(error) => log_warn!("skipped {}: {}", path.display(), error),
         }
     }
@@ -170,6 +179,37 @@ mod tests {
         fs::create_dir_all(root.0.join("plugins")).expect("a folder far above it");
 
         assert_eq!(plugin_dir_from(&deep, None), deep.join("plugins"));
+    }
+
+    /// However cargo named it here, the plugin is known by its own name.
+    #[test]
+    fn a_library_is_known_by_the_plugin_it_holds() {
+        let ext = env::consts::DLL_EXTENSION;
+
+        assert_eq!(
+            plugin_key(Path::new(&format!("plugins/libmstu_media_dumper.{ext}"))),
+            Some("mstu-media-dumper".to_string())
+        );
+
+        // What Windows builds, where nothing carries the prefix.
+        assert_eq!(
+            plugin_key(Path::new(&format!("plugins/mstu_media_dumper.{ext}"))),
+            Some("mstu-media-dumper".to_string())
+        );
+    }
+
+    #[test]
+    fn what_is_not_a_library_is_passed_over() {
+        assert_eq!(plugin_key(Path::new("plugins/mstu-media-dumper-ui")), None);
+        assert_eq!(plugin_key(Path::new("plugins/notes.txt")), None);
+
+        // A library, but not one this platform can load.
+        let foreign = if cfg!(windows) {
+            "plugin.so"
+        } else {
+            "plugin.dll"
+        };
+        assert_eq!(plugin_key(Path::new(foreign)), None);
     }
 
     #[test]

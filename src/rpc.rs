@@ -1,7 +1,5 @@
 use std::{
     collections::HashMap,
-    env,
-    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -13,13 +11,12 @@ use serde::Deserialize;
 use serde_json::{Value as Json, json};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    net::{UnixListener, UnixStream},
     sync::mpsc::{UnboundedReceiver, unbounded_channel},
 };
 
 use crate::{
     app::App,
-    log_debug, log_info, log_trace, log_warn,
+    ipc, log_debug, log_info, log_trace, log_warn,
     runtime::{
         event::{self, Notice},
         live,
@@ -45,11 +42,6 @@ const LIVE_INTERVAL: Duration = Duration::from_millis(250);
 /// However quiet everything is, the whole picture goes out this often: a page
 /// that has just opened should not have to wait for a reading to move.
 const LIVE_REFRESH: Duration = Duration::from_secs(2);
-
-pub fn socket_path() -> PathBuf {
-    let dir = env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(dir).join("mstu.sock")
-}
 
 #[derive(Deserialize)]
 struct Request {
@@ -522,22 +514,10 @@ fn backoff(current: Duration, routed: usize) -> Duration {
 /// Requests get `{ id, ok, result | error }` back; published events arrive
 /// unsolicited as `{ type: "event", plugin, event, values }`.
 pub async fn serve(mut app: App) -> std::io::Result<()> {
-    let path = socket_path();
+    let address = ipc::address();
+    let mut listener = ipc::Listener::bind(&address).await?;
 
-    // Taking the path from a live engine would orphan its listener, leaving
-    // it running but unreachable. Only a stale socket may be removed.
-    if UnixStream::connect(&path).await.is_ok() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::AddrInUse,
-            format!("an engine is already serving on {}", path.display()),
-        ));
-    }
-
-    let _ = std::fs::remove_file(&path);
-
-    let listener = UnixListener::bind(&path)?;
-
-    log_info!("listening on {}", path.display());
+    log_info!("listening on {address}");
 
     loop {
         // Keep routing while nobody is connected: the pipeline runs regardless.
@@ -545,7 +525,7 @@ pub async fn serve(mut app: App) -> std::io::Result<()> {
 
         let stream = loop {
             tokio::select! {
-                accepted = listener.accept() => break accepted?.0,
+                accepted = listener.accept() => break accepted?,
                 _ = tokio::time::sleep(idle) => {
                     idle = backoff(idle, app.route_pending());
                 }
@@ -560,8 +540,8 @@ pub async fn serve(mut app: App) -> std::io::Result<()> {
     }
 }
 
-async fn serve_client(app: &mut App, stream: UnixStream) {
-    let (read, mut write) = stream.into_split();
+async fn serve_client(app: &mut App, stream: ipc::Stream) {
+    let (read, mut write) = tokio::io::split(stream);
     let mut lines = BufReader::new(read).lines();
 
     let (tap, mut notices) = unbounded_channel::<Notice>();
@@ -956,11 +936,6 @@ mod tests {
 
         assert!(storage.value(&json!([1, 2])).is_err());
         assert!(storage.value(&json!({ "a": 1 })).is_err());
-    }
-
-    #[test]
-    fn the_socket_is_named_for_the_engine() {
-        assert!(socket_path().ends_with("mstu.sock"));
     }
 
     /// Only what moved, until the slow beat comes round and the whole picture

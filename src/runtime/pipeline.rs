@@ -838,7 +838,7 @@ mod tests {
 
     #[test]
     fn nothing_is_queued_for_a_node_that_is_not_running() {
-        let (mut pipeline, _, to) = wired();
+        let (pipeline, _, to) = wired();
 
         let data = ProcessData::new(0);
 

@@ -354,7 +354,10 @@ mod tests {
         let reused = acquire();
 
         assert_eq!(cached(), before);
-        assert!(reused.chunk_count() > 0, "it kept its chunk for the next message");
+        assert!(
+            reused.chunk_count() > 0,
+            "it kept its chunk for the next message"
+        );
 
         release(reused);
     }

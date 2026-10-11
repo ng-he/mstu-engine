@@ -437,7 +437,11 @@ async fn dispatch(app: &mut App, method: &str, params: &Json) -> Result<Json, St
             let mut storage = Storage::default();
             let value = storage.value(&field(params, "value")?)?;
 
-            app.set_parameter(&as_str(params, "plugin")?, as_usize(params, "field")?, value)?;
+            app.set_parameter(
+                &as_str(params, "plugin")?,
+                as_usize(params, "field")?,
+                value,
+            )?;
 
             Ok(json!({}))
         }
@@ -692,11 +696,7 @@ fn live_json(snapshots: Vec<(String, Vec<Owned>)>) -> Vec<Json> {
 }
 
 fn notice_json(notice: &Notice) -> Json {
-    log_trace!(
-        "-> event {} of '{}'",
-        notice.event,
-        notice.plugin_id
-    );
+    log_trace!("-> event {} of '{}'", notice.event, notice.plugin_id);
 
     json!({
         "type": "event",
@@ -802,7 +802,10 @@ mod tests {
 
     #[test]
     fn the_field_a_mapping_fills_is_read_the_same_way() {
-        assert_eq!(as_output(&json!({ "output": [1, 0] }), "output").unwrap(), vec![1, 0]);
+        assert_eq!(
+            as_output(&json!({ "output": [1, 0] }), "output").unwrap(),
+            vec![1, 0]
+        );
         assert!(as_output(&json!({}), "output").is_err());
     }
 
@@ -855,7 +858,10 @@ mod tests {
 
         assert_eq!(described["key"], "fake-plugin");
         assert_eq!(described["name"], "fake");
-        assert_eq!(described["source"], false, "it takes an input, so it is no source");
+        assert_eq!(
+            described["source"], false,
+            "it takes an input, so it is no source"
+        );
 
         let input = described["input"]["fields"].as_array().expect("its fields");
 
@@ -905,11 +911,20 @@ mod tests {
     fn json_becomes_a_value_of_the_nearest_kind() {
         let mut storage = Storage::default();
 
-        assert_eq!(storage.value(&json!(null)).unwrap().kind, ValueKind::ValueNone);
-        assert_eq!(storage.value(&json!(true)).unwrap().kind, ValueKind::ValueBool);
+        assert_eq!(
+            storage.value(&json!(null)).unwrap().kind,
+            ValueKind::ValueNone
+        );
+        assert_eq!(
+            storage.value(&json!(true)).unwrap().kind,
+            ValueKind::ValueBool
+        );
         assert_eq!(storage.value(&json!(7)).unwrap().kind, ValueKind::ValueUint);
         assert_eq!(storage.value(&json!(-7)).unwrap().kind, ValueKind::ValueInt);
-        assert_eq!(storage.value(&json!(0.5)).unwrap().kind, ValueKind::ValueFloat);
+        assert_eq!(
+            storage.value(&json!(0.5)).unwrap().kind,
+            ValueKind::ValueFloat
+        );
     }
 
     /// The value borrows the text, so whoever made it has to hold it until
@@ -928,7 +943,10 @@ mod tests {
         // A second string does not move the first.
         let other = storage.value(&json!("another")).unwrap();
 
-        assert_eq!(unsafe { value.get::<Str>().unwrap().as_str() }, "/tmp/clip.mp4");
+        assert_eq!(
+            unsafe { value.get::<Str>().unwrap().as_str() },
+            "/tmp/clip.mp4"
+        );
         assert_eq!(unsafe { other.get::<Str>().unwrap().as_str() }, "another");
     }
 
@@ -953,16 +971,22 @@ mod tests {
 
         let plugin = "PLUG-NEWS-TEST";
 
-        live::board().register(plugin, vec![crate::runtime::schema::Shape {
-            kind: ValueKind::ValueUint,
-            fields: None,
-            element: None,
-        }]);
+        live::board().register(
+            plugin,
+            vec![crate::runtime::schema::Shape {
+                kind: ValueKind::ValueUint,
+                fields: None,
+                element: None,
+            }],
+        );
 
         let values = [1u64.into()];
-        live::board().publish(plugin, &Message {
-            values: Slice::from_raw_parts(values.as_ptr(), values.len()),
-        });
+        live::board().publish(
+            plugin,
+            &Message {
+                values: Slice::from_raw_parts(values.as_ptr(), values.len()),
+            },
+        );
 
         let mut reported = HashMap::new();
         let mut refreshed = Instant::now();

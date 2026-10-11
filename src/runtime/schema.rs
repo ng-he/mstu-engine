@@ -122,7 +122,11 @@ pub fn field_kind(schema: *const Schema, field: usize) -> Option<ValueKind> {
 pub fn matches(message: &Message, expected: &[Shape]) -> bool {
     let values = message.values_slice();
 
-    values.len() == expected.len() && values.iter().zip(expected).all(|(value, shape)| fits(value, shape))
+    values.len() == expected.len()
+        && values
+            .iter()
+            .zip(expected)
+            .all(|(value, shape)| fits(value, shape))
 }
 
 /// A record is checked field by field, and a list element by element: a
@@ -138,7 +142,10 @@ fn fits(value: &Value, shape: &Shape) -> bool {
                 let held = unsafe { value.data.record_.as_slice() };
 
                 held.len() == fields.len()
-                    && held.iter().zip(fields).all(|(value, shape)| fits(value, shape))
+                    && held
+                        .iter()
+                        .zip(fields)
+                        .all(|(value, shape)| fits(value, shape))
             }
             None => true,
         },
@@ -331,14 +338,20 @@ mod tests {
             element: Some(Box::new(plain(ValueKind::ValueUint))),
         };
 
-        assert!(matches(&message(&[Value::list(Slice::empty())]), &[of_numbers]));
+        assert!(matches(
+            &message(&[Value::list(Slice::empty())]),
+            &[of_numbers]
+        ));
     }
 
     #[test]
     fn a_record_of_the_wrong_width_does_not_fit() {
         let expected = [Shape {
             kind: ValueKind::ValueRecord,
-            fields: Some(vec![plain(ValueKind::ValueUint), plain(ValueKind::ValueBool)]),
+            fields: Some(vec![
+                plain(ValueKind::ValueUint),
+                plain(ValueKind::ValueBool),
+            ]),
             element: None,
         }];
 
@@ -380,6 +393,9 @@ mod tests {
         let shapes = shape_of(&ENUM_SCHEMA);
 
         assert_eq!(shapes[0].kind, ValueKind::ValueString);
-        assert!(matches(&message(&[Str::from_static("h264").into()]), &shapes));
+        assert!(matches(
+            &message(&[Str::from_static("h264").into()]),
+            &shapes
+        ));
     }
 }

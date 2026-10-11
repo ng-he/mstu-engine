@@ -37,7 +37,10 @@ fn load_plugins(app: &mut App, dir: &Path) -> usize {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) => {
-            log_warn!("no plugins loaded, '{}' cannot be read: {error}", dir.display());
+            log_warn!(
+                "no plugins loaded, '{}' cannot be read: {error}",
+                dir.display()
+            );
             return 0;
         }
     };
@@ -79,7 +82,10 @@ async fn main() -> Result<(), String> {
         let mut app = App::new();
         let loaded = load_plugins(&mut app, &dir);
 
-        log_info!("serving {loaded} plugin librarie(s) from '{}'", dir.display());
+        log_info!(
+            "serving {loaded} plugin librarie(s) from '{}'",
+            dir.display()
+        );
 
         let served = rpc::serve(app).await.map_err(|error| error.to_string());
 

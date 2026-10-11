@@ -819,7 +819,10 @@ mod tests {
         assert_eq!(pipeline.remove_mapping(from, 99, &[0]), None);
         assert_eq!(pipeline.remove_mapping(99, to, &[0]), None);
 
-        assert!(pipeline.disconnect(from, to), "the link itself is still there");
+        assert!(
+            pipeline.disconnect(from, to),
+            "the link itself is still there"
+        );
     }
 
     #[test]

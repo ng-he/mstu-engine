@@ -90,7 +90,10 @@ mod tests {
             values: Slice::from_raw_parts(values.as_ptr(), values.len()),
         };
 
-        assert_eq!(own_message(&message), vec![Owned::Uint(7), Owned::Bool(true)]);
+        assert_eq!(
+            own_message(&message),
+            vec![Owned::Uint(7), Owned::Bool(true)]
+        );
     }
 
     #[test]

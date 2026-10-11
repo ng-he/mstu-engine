@@ -692,6 +692,13 @@ mod tests {
         let mapper = Mapper::new();
 
         assert!(mapper.is_empty());
-        assert!(!mapper.covers(&[], &[Shape { kind: ValueKind::ValueUint, fields: None, element: None }]));
+        assert!(!mapper.covers(
+            &[],
+            &[Shape {
+                kind: ValueKind::ValueUint,
+                fields: None,
+                element: None
+            }]
+        ));
     }
 }

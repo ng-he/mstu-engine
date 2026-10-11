@@ -140,7 +140,10 @@ mod tests {
 
     #[test]
     fn a_target_is_the_module_without_the_crate_in_front() {
-        assert_eq!(target("mstu_engine::runtime::pipeline"), "runtime::pipeline");
+        assert_eq!(
+            target("mstu_engine::runtime::pipeline"),
+            "runtime::pipeline"
+        );
         assert_eq!(target("somewhere::else"), "somewhere::else");
     }
 }

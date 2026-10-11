@@ -138,7 +138,10 @@ impl App {
         let handle = (descriptor.create)(&*self.ctx, Str::new(id.as_str()));
 
         match &ui {
-            Some(path) => log_info!("created plugin '{id}' from '{library}', ui {}", path.display()),
+            Some(path) => log_info!(
+                "created plugin '{id}' from '{library}', ui {}",
+                path.display()
+            ),
             None => log_info!("created plugin '{id}' from '{library}', no ui"),
         }
 
@@ -264,7 +267,13 @@ impl App {
     }
 
     /// Stops invoking `command` on `to` when `from` publishes `event`.
-    pub fn unsubscribe(&mut self, from: &str, event: usize, to: &str, command: usize) -> Result<()> {
+    pub fn unsubscribe(
+        &mut self,
+        from: &str,
+        event: usize,
+        to: &str,
+        command: usize,
+    ) -> Result<()> {
         let target = self.plugin(to)?;
         let handle = target.handle;
 
@@ -361,9 +370,7 @@ impl App {
         if disconnected {
             log_info!("pipeline {pipeline_id}: disconnected {from_node_id} -> {to_node_id}");
         } else {
-            log_warn!(
-                "pipeline {pipeline_id}: {from_node_id} -> {to_node_id} was not connected"
-            );
+            log_warn!("pipeline {pipeline_id}: {from_node_id} -> {to_node_id} was not connected");
         }
 
         Ok(disconnected)
@@ -434,7 +441,10 @@ impl App {
     pub fn stop(&mut self, pipeline_id: PipelineId) -> Result<()> {
         let pipeline = self.pipeline_mut(pipeline_id)?;
 
-        log_info!("pipeline {pipeline_id} '{}': stopping sources", pipeline.name);
+        log_info!(
+            "pipeline {pipeline_id} '{}': stopping sources",
+            pipeline.name
+        );
 
         pipeline.stop();
 
@@ -463,7 +473,10 @@ impl App {
         node_id: NodeId,
         running: bool,
     ) -> Result<()> {
-        if !self.pipeline_mut(pipeline_id)?.set_node_running(node_id, running) {
+        if !self
+            .pipeline_mut(pipeline_id)?
+            .set_node_running(node_id, running)
+        {
             return Err(format!("node {node_id} not started"));
         }
 

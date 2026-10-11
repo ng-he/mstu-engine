@@ -141,7 +141,10 @@ mod tests {
         let copy = unsafe { clone_value(&mut arena, &value) };
 
         assert!(arena.owns(unsafe { copy.data.string_ }.ptr));
-        assert_ne!(unsafe { copy.data.string_ }.ptr, unsafe { value.data.string_ }.ptr);
+        assert_ne!(
+            unsafe { copy.data.string_ }.ptr,
+            unsafe { value.data.string_ }.ptr
+        );
 
         drop(text);
 
@@ -192,7 +195,10 @@ mod tests {
         drop(text);
 
         assert_eq!(values.len(), 2);
-        assert_eq!(unsafe { values[0].get::<Str>().unwrap().as_str() }, "inside");
+        assert_eq!(
+            unsafe { values[0].get::<Str>().unwrap().as_str() },
+            "inside"
+        );
         assert_eq!(values[1].get::<u64>(), Some(2));
     }
 
@@ -201,7 +207,10 @@ mod tests {
         let mut arena = arena();
 
         assert_eq!(unsafe { clone_str(&mut arena, Str::empty()) }.len, 0);
-        assert_eq!(unsafe { clone_slice::<u8>(&mut arena, Slice::empty()) }.len, 0);
+        assert_eq!(
+            unsafe { clone_slice::<u8>(&mut arena, Slice::empty()) }.len,
+            0
+        );
         assert_eq!(unsafe { clone_values(&mut arena, Slice::empty()) }.len, 0);
 
         assert_eq!(arena.chunk_count(), 0);

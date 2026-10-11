@@ -4,9 +4,7 @@ use std::{
     sync::{LazyLock, Mutex, MutexGuard},
 };
 
-use mstu_sdk::{
-    EventDescriptor, Message, PluginDescriptor, PluginHandle, Slice, Str, message,
-};
+use mstu_sdk::{EventDescriptor, Message, PluginDescriptor, PluginHandle, Slice, Str, message};
 
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -69,7 +67,9 @@ impl Subscription {
             command,
             plugin,
             descriptor,
-            payload_shape: payload.map(|schema| schema::shape_of(schema)).unwrap_or_default(),
+            payload_shape: payload
+                .map(|schema| schema::shape_of(schema))
+                .unwrap_or_default(),
         }
     }
 
@@ -398,7 +398,6 @@ mod tests {
         let _globals = fake::globals();
         use tokio::sync::mpsc::unbounded_channel;
 
-
         manager().register("PLUG-EVENT-TEST", &SINK);
 
         let (tap, mut watched) = unbounded_channel();
@@ -468,12 +467,21 @@ mod tests {
         manager.register("a", &SINK);
         manager.subscribe("a", 0, subscription(1));
 
-        assert_eq!(manager.remove_mapping("a", 0, handle(1), 0, &[1]), Some(true));
-        assert_eq!(manager.remove_mapping("a", 0, handle(1), 0, &[1]), Some(false));
+        assert_eq!(
+            manager.remove_mapping("a", 0, handle(1), 0, &[1]),
+            Some(true)
+        );
+        assert_eq!(
+            manager.remove_mapping("a", 0, handle(1), 0, &[1]),
+            Some(false)
+        );
 
         // No such subscription at all is a different answer from "nothing removed".
         assert_eq!(manager.remove_mapping("a", 0, handle(2), 0, &[1]), None);
-        assert_eq!(manager.remove_mapping("nowhere", 0, handle(1), 0, &[1]), None);
+        assert_eq!(
+            manager.remove_mapping("nowhere", 0, handle(1), 0, &[1]),
+            None
+        );
     }
 
     /// A released plugin must not stay reachable through an event it never
@@ -535,7 +543,11 @@ mod tests {
         let _globals = fake::globals();
         let mut manager = Manager::new();
         manager.register("a", &SINK);
-        manager.subscribe("a", 0, Subscription::new(handle(1), &SINK, 0, Mapper::new()));
+        manager.subscribe(
+            "a",
+            0,
+            Subscription::new(handle(1), &SINK, 0, Mapper::new()),
+        );
 
         fake::forget_calls();
 
@@ -562,7 +574,6 @@ mod tests {
     fn a_published_event_is_mirrored_to_whoever_is_watching() {
         let _globals = fake::globals();
         use tokio::sync::mpsc::unbounded_channel;
-
 
         let (tap, mut watched) = unbounded_channel();
         set_tap(Some(tap));
@@ -595,7 +606,10 @@ mod tests {
         manager.new_event("a", 0);
         manager.publish("a", 0);
 
-        assert!(watched.try_recv().is_err(), "nothing is mirrored once it is off");
+        assert!(
+            watched.try_recv().is_err(),
+            "nothing is mirrored once it is off"
+        );
     }
 
     #[test]

@@ -167,6 +167,13 @@ impl Arena {
         self.chunks.len()
     }
 
+    #[cfg(test)]
+    fn owns_everything_it_handed_out(&self) -> bool {
+        self.chunks
+            .iter()
+            .all(|chunk| self.owns(chunk.ptr.as_ptr()))
+    }
+
     /// Whether `ptr` points into this arena, so a value already lives here and
     /// needs no copy. Chunks are few, so this is a walk of one or two ranges.
     pub fn owns(&self, ptr: *const u8) -> bool {
@@ -268,5 +275,101 @@ mod tests {
         }
 
         assert_eq!(cached(), POOL_LIMIT);
+    }
+
+    #[test]
+    fn an_unused_arena_costs_nothing() {
+        let arena = Arena::new(CHUNK_SIZE);
+
+        assert_eq!(arena.chunk_count(), 0);
+    }
+
+    #[test]
+    fn a_zero_length_allocation_takes_no_memory() {
+        let mut arena = Arena::new(CHUNK_SIZE);
+
+        let ptr = arena.alloc::<u64>(0);
+
+        assert!(!ptr.is_null(), "aligned but never read");
+        assert_eq!(arena.chunk_count(), 0);
+    }
+
+    #[test]
+    fn allocations_are_aligned_for_what_they_hold() {
+        let mut arena = Arena::new(CHUNK_SIZE);
+
+        arena.alloc::<u8>(1);
+
+        let value = arena.alloc::<u64>(1);
+
+        assert_eq!(value as usize % std::mem::align_of::<u64>(), 0);
+    }
+
+    #[test]
+    fn something_larger_than_a_chunk_gets_a_chunk_of_its_own() {
+        let mut arena = Arena::new(1024);
+
+        arena.alloc::<u8>(4096);
+
+        assert_eq!(arena.chunk_count(), 1);
+        assert!(arena.owns_everything_it_handed_out());
+    }
+
+    /// The arena answers for what it handed out and for nothing else, which
+    /// is what decides whether a payload is copied.
+    #[test]
+    fn it_knows_its_own_memory_from_anyone_elses() {
+        let mut arena = Arena::new(CHUNK_SIZE);
+
+        let mine = arena.alloc::<u8>(32);
+        let theirs = vec![0u8; 32];
+
+        assert!(arena.owns(mine));
+        assert!(!arena.owns(theirs.as_ptr()));
+        assert!(!arena.owns(std::ptr::null()));
+    }
+
+    #[test]
+    fn resetting_hands_the_same_memory_out_again() {
+        let mut arena = Arena::new(CHUNK_SIZE);
+
+        let first = arena.alloc::<u8>(64);
+        arena.reset();
+        let second = arena.alloc::<u8>(64);
+
+        assert_eq!(first, second);
+        assert_eq!(arena.chunk_count(), 1, "nothing was freed");
+    }
+
+    #[test]
+    fn a_released_arena_comes_back_from_the_pool() {
+        let before = cached();
+
+        let mut arena = acquire();
+        arena.alloc::<u8>(128);
+        release(arena);
+
+        assert_eq!(cached(), before + 1);
+
+        let reused = acquire();
+
+        assert_eq!(cached(), before);
+        assert!(reused.chunk_count() > 0, "it kept its chunk for the next message");
+
+        release(reused);
+    }
+
+    /// The counters are for the whole process, and the tests run beside each
+    /// other, so what can be said is that this arena's chunk is in there
+    /// while it exists.
+    #[test]
+    fn what_is_alive_is_counted() {
+        let mut arena = Arena::new(CHUNK_SIZE);
+        arena.alloc::<u8>(16);
+
+        let (chunks, bytes) = live();
+
+        assert!(chunks >= 1);
+        assert!(bytes >= CHUNK_SIZE);
     }
 }

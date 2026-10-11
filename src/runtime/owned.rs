@@ -36,3 +36,69 @@ pub fn own(value: &Value) -> Owned {
 pub fn own_message(message: &Message) -> Vec<Owned> {
     message.values_slice().iter().map(own).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use mstu_sdk::{Slice, Str};
+
+    use super::*;
+
+    #[test]
+    fn every_kind_comes_out_as_itself() {
+        assert_eq!(own(&Value::none()), Owned::None);
+        assert_eq!(own(&true.into()), Owned::Bool(true));
+        assert_eq!(own(&7u64.into()), Owned::Uint(7));
+        assert_eq!(own(&(-7i64).into()), Owned::Int(-7));
+        assert_eq!(own(&0.5f64.into()), Owned::Float(0.5));
+    }
+
+    #[test]
+    fn a_string_is_copied_rather_than_pointed_at() {
+        let text = String::from("dump.h264");
+        let value: Value = Str::new(text.as_str()).into();
+
+        let owned = own(&value);
+        drop(text);
+
+        assert_eq!(owned, Owned::Str("dump.h264".to_string()));
+    }
+
+    /// A payload is for display, so what is kept is how big it was.
+    #[test]
+    fn a_payload_keeps_its_size_and_not_its_bytes() {
+        let bytes = [0u8; 64];
+        let value: Value = Slice::from_raw_parts(bytes.as_ptr(), bytes.len()).into();
+
+        assert_eq!(own(&value), Owned::Bytes(64));
+    }
+
+    #[test]
+    fn a_record_and_a_list_are_both_kept_in_order() {
+        let inner = [1u64.into(), Str::from_static("a").into()];
+        let slice = Slice::from_raw_parts(inner.as_ptr(), inner.len());
+
+        let expected = Owned::List(vec![Owned::Uint(1), Owned::Str("a".to_string())]);
+
+        assert_eq!(own(&Value::list(slice)), expected);
+        assert_eq!(own(&Value::record(slice)), expected);
+    }
+
+    #[test]
+    fn a_message_comes_out_field_by_field() {
+        let values = [7u64.into(), true.into()];
+        let message = Message {
+            values: Slice::from_raw_parts(values.as_ptr(), values.len()),
+        };
+
+        assert_eq!(own_message(&message), vec![Owned::Uint(7), Owned::Bool(true)]);
+    }
+
+    #[test]
+    fn an_empty_message_owns_nothing() {
+        let message = Message {
+            values: Slice::empty(),
+        };
+
+        assert!(own_message(&message).is_empty());
+    }
+}

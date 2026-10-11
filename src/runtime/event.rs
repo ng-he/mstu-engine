@@ -350,3 +350,265 @@ pub extern "C" fn new_event(plugin_id: Str, event: usize) -> *const message::Wri
 pub extern "C" fn publish_events(plugin_id: Str, event: usize) {
     manager().publish(unsafe { plugin_id.as_str() }, event);
 }
+
+#[cfg(test)]
+mod tests {
+    use mstu_sdk::{Slice, Str};
+
+    use super::*;
+    use crate::runtime::{
+        fake::{self, SINK, handle},
+        mapper::Mapping,
+    };
+
+    fn one_to_one() -> Mapper {
+        let mut mapper = Mapper::new();
+
+        mapper.add(Mapping {
+            input: vec![0],
+            output: vec![0],
+        });
+
+        mapper.add(Mapping {
+            input: vec![1],
+            output: vec![1],
+        });
+
+        mapper
+    }
+
+    fn subscription(plugin: usize) -> Subscription {
+        Subscription::new(handle(plugin), &SINK, 0, one_to_one())
+    }
+
+    #[test]
+    fn an_event_of_a_plugin_nobody_registered_goes_nowhere() {
+        let _globals = fake::globals();
+        let mut manager = Manager::new();
+
+        assert!(manager.new_event("ghost", 0).is_null());
+
+        // Publishing it is a no-op rather than a panic.
+        manager.publish("ghost", 0);
+    }
+
+    /// `HostContext::new_event` and `publish_events`, as a plugin calls them.
+    #[test]
+    fn a_plugin_raises_an_event_through_the_host() {
+        let _globals = fake::globals();
+        use tokio::sync::mpsc::unbounded_channel;
+
+
+        manager().register("PLUG-EVENT-TEST", &SINK);
+
+        let (tap, mut watched) = unbounded_channel();
+        set_tap(Some(tap));
+
+        let writer = new_event(Str::from_static("PLUG-EVENT-TEST"), 0) as *mut message::Writer;
+        assert!(!writer.is_null());
+
+        let values = [5u64.into(), Str::from_static("five").into()];
+
+        unsafe {
+            ((*writer).fill)(
+                writer,
+                Message {
+                    values: Slice::from_raw_parts(values.as_ptr(), values.len()),
+                },
+            )
+        };
+
+        publish_events(Str::from_static("PLUG-EVENT-TEST"), 0);
+
+        let notice = watched.try_recv().expect("the event to reach the socket");
+        assert_eq!(notice.plugin_id, "PLUG-EVENT-TEST");
+
+        set_tap(None);
+        manager().forget("PLUG-EVENT-TEST", handle(0));
+    }
+
+    #[test]
+    fn an_event_the_plugin_does_not_have_is_refused() {
+        let _globals = fake::globals();
+        let mut manager = Manager::new();
+        manager.register("a", &SINK);
+
+        assert!(manager.new_event("a", 9).is_null());
+        assert!(!manager.new_event("a", 0).is_null());
+    }
+
+    #[test]
+    fn subscribing_the_same_command_again_replaces_it() {
+        let _globals = fake::globals();
+        let mut manager = Manager::new();
+        manager.register("a", &SINK);
+
+        manager.subscribe("a", 0, subscription(1));
+        manager.subscribe("a", 0, subscription(1));
+
+        // One subscriber, so one removal empties it.
+        assert!(manager.unsubscribe("a", 0, handle(1), 0));
+        assert!(!manager.unsubscribe("a", 0, handle(1), 0));
+    }
+
+    #[test]
+    fn unsubscribing_what_was_never_subscribed_says_so() {
+        let _globals = fake::globals();
+        let mut manager = Manager::new();
+        manager.register("a", &SINK);
+
+        assert!(!manager.unsubscribe("a", 0, handle(1), 0));
+        assert!(!manager.unsubscribe("nowhere", 0, handle(1), 0));
+    }
+
+    #[test]
+    fn a_mapping_of_a_subscription_is_removed_by_its_field() {
+        let _globals = fake::globals();
+        let mut manager = Manager::new();
+        manager.register("a", &SINK);
+        manager.subscribe("a", 0, subscription(1));
+
+        assert_eq!(manager.remove_mapping("a", 0, handle(1), 0, &[1]), Some(true));
+        assert_eq!(manager.remove_mapping("a", 0, handle(1), 0, &[1]), Some(false));
+
+        // No such subscription at all is a different answer from "nothing removed".
+        assert_eq!(manager.remove_mapping("a", 0, handle(2), 0, &[1]), None);
+        assert_eq!(manager.remove_mapping("nowhere", 0, handle(1), 0, &[1]), None);
+    }
+
+    /// A released plugin must not stay reachable through an event it never
+    /// saw unsubscribed.
+    #[test]
+    fn forgetting_a_plugin_takes_every_subscription_pointing_at_it() {
+        let _globals = fake::globals();
+        let mut manager = Manager::new();
+
+        manager.register("a", &SINK);
+        manager.register("b", &SINK);
+
+        // b listens to a, and a listens to b.
+        manager.subscribe("a", 0, subscription(2));
+        manager.subscribe("b", 0, subscription(1));
+
+        manager.forget("b", handle(2));
+
+        assert!(manager.new_event("b", 0).is_null(), "its channel is gone");
+        assert!(
+            !manager.unsubscribe("a", 0, handle(2), 0),
+            "and so is what pointed at it"
+        );
+    }
+
+    #[test]
+    fn a_published_event_reaches_the_command_that_subscribed() {
+        let _globals = fake::globals();
+        let mut manager = Manager::new();
+        manager.register("a", &SINK);
+        manager.subscribe("a", 0, subscription(1));
+
+        fake::forget_calls();
+
+        let writer = manager.new_event("a", 0) as *mut message::Writer;
+        assert!(!writer.is_null());
+
+        let values = [7u64.into(), Str::from_static("seven").into()];
+        let message = Message {
+            values: Slice::from_raw_parts(values.as_ptr(), values.len()),
+        };
+
+        unsafe { ((*writer).fill)(writer, message) };
+
+        manager.publish("a", 0);
+
+        assert_eq!(fake::invoked(), 1);
+        assert_eq!(fake::last_id(), 7);
+
+        // The queue is emptied by publishing, so a second one carries nothing.
+        manager.publish("a", 0);
+        assert_eq!(fake::invoked(), 1);
+    }
+
+    /// An unmapped subscription would deliver a payload of nothing, which a
+    /// command that reads its fields cannot survive.
+    #[test]
+    fn a_command_is_not_called_with_a_payload_nothing_filled() {
+        let _globals = fake::globals();
+        let mut manager = Manager::new();
+        manager.register("a", &SINK);
+        manager.subscribe("a", 0, Subscription::new(handle(1), &SINK, 0, Mapper::new()));
+
+        fake::forget_calls();
+
+        let writer = manager.new_event("a", 0) as *mut message::Writer;
+        let values = [1u64.into(), Str::from_static("one").into()];
+
+        unsafe {
+            ((*writer).fill)(
+                writer,
+                Message {
+                    values: Slice::from_raw_parts(values.as_ptr(), values.len()),
+                },
+            )
+        };
+
+        manager.publish("a", 0);
+
+        assert_eq!(fake::invoked(), 0);
+    }
+
+    /// What the socket listens on: every published event is mirrored to
+    /// whoever is watching the engine, subscriber or not.
+    #[test]
+    fn a_published_event_is_mirrored_to_whoever_is_watching() {
+        let _globals = fake::globals();
+        use tokio::sync::mpsc::unbounded_channel;
+
+
+        let (tap, mut watched) = unbounded_channel();
+        set_tap(Some(tap));
+
+        let mut manager = Manager::new();
+        manager.register("a", &SINK);
+
+        let writer = manager.new_event("a", 0) as *mut message::Writer;
+        let values = [3u64.into(), Str::from_static("three").into()];
+
+        unsafe {
+            ((*writer).fill)(
+                writer,
+                Message {
+                    values: Slice::from_raw_parts(values.as_ptr(), values.len()),
+                },
+            )
+        };
+
+        manager.publish("a", 0);
+
+        let notice = watched.try_recv().expect("the event to be mirrored");
+
+        assert_eq!(notice.plugin_id, "a");
+        assert_eq!(notice.event, 0);
+        assert_eq!(notice.values[0], crate::runtime::owned::Owned::Uint(3));
+
+        set_tap(None);
+
+        manager.new_event("a", 0);
+        manager.publish("a", 0);
+
+        assert!(watched.try_recv().is_err(), "nothing is mirrored once it is off");
+    }
+
+    #[test]
+    fn an_event_nobody_subscribed_to_is_published_to_nobody() {
+        let _globals = fake::globals();
+        let mut manager = Manager::new();
+        manager.register("a", &SINK);
+
+        fake::forget_calls();
+
+        manager.new_event("a", 0);
+        manager.publish("a", 0);
+
+        assert_eq!(fake::invoked(), 0);
+    }
+}

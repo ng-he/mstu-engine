@@ -200,3 +200,114 @@ mod tests {
         assert_eq!(board.changed(&mut sent).len(), 1);
     }
 }
+
+#[cfg(test)]
+mod more_tests {
+    use std::collections::HashMap;
+
+    use mstu_sdk::{Slice, Value, ValueKind};
+    use tokio::sync::mpsc::unbounded_channel;
+
+    use super::*;
+
+    fn shape() -> Vec<Shape> {
+        vec![Shape {
+            kind: ValueKind::ValueUint,
+            fields: None,
+            element: None,
+        }]
+    }
+
+    fn message(values: &[Value]) -> Message {
+        Message {
+            values: Slice::from_raw_parts(values.as_ptr(), values.len()),
+        }
+    }
+
+    #[test]
+    fn a_plugin_with_nothing_to_show_is_not_on_the_board() {
+        let mut board = Board::new();
+
+        board.register("a", Vec::new());
+        board.publish("a", &message(&[1u64.into()]));
+
+        assert!(board.changed(&mut HashMap::new()).is_empty());
+    }
+
+    /// One wake carries every publish until the news is taken, so a plugin
+    /// publishing per frame does not wake the socket per frame.
+    #[test]
+    fn many_readings_wake_the_socket_once() {
+        let (tap, mut woken) = unbounded_channel();
+
+        let mut board = Board::new();
+        board.set_tap(Some(tap));
+        board.register("a", shape());
+
+        for value in 0..10u64 {
+            board.publish("a", &message(&[value.into()]));
+        }
+
+        let mut wakes = 0;
+        while woken.try_recv().is_ok() {
+            wakes += 1;
+        }
+
+        assert_eq!(wakes, 1);
+
+        // Once the news is taken, the next reading wakes it again.
+        board.changed(&mut HashMap::new());
+        board.publish("a", &message(&[11u64.into()]));
+
+        assert!(woken.try_recv().is_ok());
+    }
+
+    #[test]
+    fn nothing_is_woken_once_the_tap_is_taken_away() {
+        let (tap, mut woken) = unbounded_channel();
+
+        let mut board = Board::new();
+        board.set_tap(Some(tap));
+        board.register("a", shape());
+        board.set_tap(None);
+
+        board.publish("a", &message(&[1u64.into()]));
+
+        assert!(woken.try_recv().is_err());
+    }
+
+    /// `HostContext::publish_live`, as a plugin calls it.
+    #[test]
+    fn a_plugin_publishes_through_the_host_onto_the_board() {
+        let _globals = crate::runtime::fake::globals();
+
+        board().register("PLUG-LIVE-TEST", shape());
+
+        let values = [42u64.into()];
+        publish_live(Str::from_static("PLUG-LIVE-TEST"), message(&values));
+
+        let news = board().changed(&mut HashMap::new());
+        let ours = news
+            .iter()
+            .find(|(plugin, _)| plugin == "PLUG-LIVE-TEST")
+            .expect("what was just published");
+
+        assert_eq!(ours.1, vec![crate::runtime::owned::Owned::Uint(42)]);
+
+        board().forget("PLUG-LIVE-TEST");
+    }
+
+    #[test]
+    fn the_latest_reading_is_the_one_that_is_sent() {
+        let mut board = Board::new();
+        board.register("a", shape());
+
+        board.publish("a", &message(&[1u64.into()]));
+        board.publish("a", &message(&[2u64.into()]));
+
+        let news = board.changed(&mut HashMap::new());
+
+        assert_eq!(news.len(), 1);
+        assert_eq!(news[0].1, vec![crate::runtime::owned::Owned::Uint(2)]);
+    }
+}

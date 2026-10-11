@@ -519,7 +519,42 @@ mod tests {
 
     /// What the sharing is for: a frame-sized payload, both ways.
     #[test]
-    fn sharing_beats_copying_on_a_frame() {
+    fn sharing_hands_over_the_bytes_while_mapping_copies_them() {
+        const SIZE: usize = 384 * 1024;
+
+        let source = frame(SIZE);
+        let mapper = both_fields();
+
+        let payload = |data: &Message| unsafe { data.values_slice()[1].data.bytes_ };
+        let from = payload(&source.output);
+
+        // Shared: the target points at the very bytes the source holds.
+        let mut shared = ProcessData::from_shape(&schema::shape_of(&FRAME));
+        assert!(mapper.share(&source.output, &mut shared.output));
+
+        assert_eq!(payload(&shared.output).ptr, from.ptr, "nothing was moved");
+        assert_eq!(payload(&shared.output).len, SIZE);
+
+        // Mapped: the target gets bytes of its own, in its own arena.
+        let mut copied = ProcessData::from_shape(&schema::shape_of(&FRAME));
+        let mut arena = crate::runtime::alloc::acquire();
+
+        assert!(mapper.map(&source.output, &mut copied.output, &mut arena));
+
+        let to = payload(&copied.output);
+
+        assert_ne!(to.ptr, from.ptr, "the bytes were copied");
+        assert!(arena.owns(to.ptr));
+        assert_eq!(unsafe { to.as_slice() }, unsafe { from.as_slice() });
+
+        crate::runtime::alloc::release(arena);
+    }
+
+    /// What the copy costs, for when the number matters. Printed rather than
+    /// asserted: a wall clock under load says nothing you can rely on.
+    #[test]
+    #[ignore = "a measurement, not a test"]
+    fn measures_what_copying_a_frame_costs() {
         const SIZE: usize = 384 * 1024;
         const ROUNDS: usize = 200;
 
@@ -551,9 +586,6 @@ mod tests {
             "{SIZE} byte payload x{ROUNDS}: copying {copying:?} ({:.0} MB/s), sharing {sharing:?}",
             (SIZE * ROUNDS) as f64 / copying.as_secs_f64() / 1e6
         );
-
-        // Not a close call: one moves the bytes, the other moves a pointer.
-        assert!(sharing * 4 < copying);
     }
 
     /// A record that came out the wrong shape must not reach a plugin.
@@ -586,5 +618,80 @@ mod tests {
         // A list where a record belongs: same slice, wrong kind.
         data.output.values_slice_mut()[1] = Value::list(inner);
         assert!(!schema::matches(&data.output, &shape));
+    }
+
+    /// The UI removes a wire by naming the field it fills.
+    #[test]
+    fn a_mapping_is_removed_by_the_field_it_fills() {
+        let mut mapper = Mapper::new();
+
+        mapper.add(Mapping {
+            input: vec![0],
+            output: vec![0],
+        });
+
+        mapper.add(Mapping {
+            input: vec![1],
+            output: vec![1],
+        });
+
+        assert!(mapper.remove(&[1]));
+        assert!(!mapper.is_empty());
+
+        assert!(mapper.remove(&[0]));
+        assert!(mapper.is_empty(), "the last one leaves nothing behind");
+    }
+
+    #[test]
+    fn removing_a_field_nothing_fills_changes_nothing() {
+        let mut mapper = Mapper::new();
+
+        mapper.add(Mapping {
+            input: vec![0],
+            output: vec![0],
+        });
+
+        assert!(!mapper.remove(&[7]));
+        assert!(!mapper.remove(&[]));
+        assert!(!mapper.is_empty());
+    }
+
+    /// What is left still runs, which is what a recompile is for.
+    #[test]
+    fn what_is_left_after_a_removal_still_maps() {
+        let shapes = schema::shape_of(&OUTER);
+
+        let mut mapper = Mapper::new();
+
+        mapper.add(Mapping {
+            input: vec![0],
+            output: vec![0],
+        });
+
+        mapper.add(Mapping {
+            input: vec![1],
+            output: vec![1],
+        });
+
+        mapper.remove(&[1]);
+
+        let mut arena = crate::runtime::alloc::Arena::new(4096);
+        let mut data = ProcessData::from_shape(&shapes);
+
+        let values = [9u64.into(), Value::none()];
+        let input = Message {
+            values: Slice::from_raw_parts(values.as_ptr(), values.len()),
+        };
+
+        assert!(mapper.map(&input, &mut data.output, &mut arena));
+        assert_eq!(data.output.values_slice()[0].get::<u64>(), Some(9));
+    }
+
+    #[test]
+    fn an_empty_mapper_maps_nothing_and_says_so() {
+        let mapper = Mapper::new();
+
+        assert!(mapper.is_empty());
+        assert!(!mapper.covers(&[], &[Shape { kind: ValueKind::ValueUint, fields: None, element: None }]));
     }
 }

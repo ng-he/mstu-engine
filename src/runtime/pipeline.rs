@@ -693,3 +693,152 @@ impl Pipeline {
         worker.tx.try_send(data).is_ok()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{
+        fake::{SINK, SOURCE, handle},
+        mapper::Mapping,
+    };
+
+    /// Field to field, which is what the desktop sends for a plain wire.
+    fn straight() -> Mapper {
+        let mut mapper = Mapper::new();
+
+        mapper.add(Mapping {
+            input: vec![0],
+            output: vec![0],
+        });
+
+        mapper.add(Mapping {
+            input: vec![1],
+            output: vec![1],
+        });
+
+        mapper
+    }
+
+    /// A source and a sink, neither started.
+    fn wired() -> (Pipeline, NodeId, NodeId) {
+        let mut pipeline = Pipeline::new(1, "test");
+
+        let from = pipeline.add_node(handle(1), &SOURCE);
+        let to = pipeline.add_node(handle(2), &SINK);
+
+        (pipeline, from, to)
+    }
+
+    #[test]
+    fn a_node_that_takes_nothing_is_a_source() {
+        assert!(is_source(&SOURCE));
+        assert!(!is_source(&SINK));
+    }
+
+    #[test]
+    fn every_node_added_gets_a_name_of_its_own() {
+        let (pipeline, from, to) = wired();
+
+        assert_ne!(from, to);
+        assert!(pipeline.has_node(from));
+        assert!(pipeline.has_node(to));
+        assert!(!pipeline.has_node(99));
+    }
+
+    #[test]
+    fn the_nodes_running_a_plugin_are_found_by_its_handle() {
+        let mut pipeline = Pipeline::new(1, "test");
+
+        let first = pipeline.add_node(handle(1), &SOURCE);
+        let second = pipeline.add_node(handle(1), &SOURCE);
+        pipeline.add_node(handle(2), &SINK);
+
+        let mut found = pipeline.nodes_of(handle(1));
+        found.sort();
+
+        assert_eq!(found, vec![first, second]);
+        assert!(pipeline.nodes_of(handle(9)).is_empty());
+    }
+
+    #[test]
+    fn a_node_can_be_renamed() {
+        let (mut pipeline, from, _) = wired();
+
+        pipeline.set_node_name(from, "reader");
+
+        assert_eq!(pipeline.node_name(from), Some("reader"));
+        assert_eq!(pipeline.node_name(99), None);
+    }
+
+    #[test]
+    fn two_nodes_that_exist_can_be_wired_together() {
+        let (mut pipeline, from, to) = wired();
+
+        assert!(pipeline.connect(from, to, straight()));
+    }
+
+    #[test]
+    fn a_wire_to_a_node_that_is_not_there_is_refused() {
+        let (mut pipeline, from, _) = wired();
+
+        assert!(!pipeline.connect(from, 99, straight()));
+        assert!(!pipeline.connect(99, from, straight()));
+    }
+
+    /// Wiring the same pair again replaces the mapping rather than doubling
+    /// the traffic.
+    #[test]
+    fn wiring_the_same_pair_again_replaces_what_was_there() {
+        let (mut pipeline, from, to) = wired();
+
+        pipeline.connect(from, to, straight());
+        pipeline.connect(from, to, straight());
+
+        assert!(pipeline.disconnect(from, to));
+        assert!(!pipeline.disconnect(from, to), "one link, one removal");
+    }
+
+    #[test]
+    fn unwiring_what_was_never_wired_says_so() {
+        let (mut pipeline, from, to) = wired();
+
+        assert!(!pipeline.disconnect(from, to));
+        assert!(!pipeline.disconnect(99, to));
+    }
+
+    #[test]
+    fn one_mapping_of_a_link_can_go_without_the_link() {
+        let (mut pipeline, from, to) = wired();
+
+        pipeline.connect(from, to, straight());
+
+        assert_eq!(pipeline.remove_mapping(from, to, &[1]), Some(true));
+        assert_eq!(pipeline.remove_mapping(from, to, &[1]), Some(false));
+
+        // No such link at all is a different answer from "nothing removed".
+        assert_eq!(pipeline.remove_mapping(from, 99, &[0]), None);
+        assert_eq!(pipeline.remove_mapping(99, to, &[0]), None);
+
+        assert!(pipeline.disconnect(from, to), "the link itself is still there");
+    }
+
+    #[test]
+    fn removing_a_node_takes_its_wires_with_it() {
+        let (mut pipeline, from, to) = wired();
+
+        pipeline.connect(from, to, straight());
+        pipeline.remove_node(to);
+
+        assert!(!pipeline.has_node(to));
+        assert_eq!(pipeline.remove_mapping(from, to, &[0]), None);
+    }
+
+    #[test]
+    fn nothing_is_queued_for_a_node_that_is_not_running() {
+        let (mut pipeline, _, to) = wired();
+
+        let data = ProcessData::new(0);
+
+        assert!(!pipeline.send(to, data), "only a started node has a queue");
+    }
+}

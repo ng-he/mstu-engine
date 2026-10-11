@@ -709,3 +709,277 @@ fn notice_json(notice: &Notice) -> Json {
 fn drain<T>(channel: &mut UnboundedReceiver<T>) {
     while channel.try_recv().is_ok() {}
 }
+
+#[cfg(test)]
+mod tests {
+    use mstu_sdk::{Str, TYPE_BYTES, TYPE_F64, TYPE_I32, TYPE_STRING, TYPE_U64};
+
+    use super::*;
+
+    #[test]
+    fn a_value_goes_out_as_the_json_of_its_kind() {
+        assert_eq!(value_json(&true.into()), json!(true));
+        assert_eq!(value_json(&7u64.into()), json!(7));
+        assert_eq!(value_json(&(-7i64).into()), json!(-7));
+        assert_eq!(value_json(&0.5f64.into()), json!(0.5));
+        assert_eq!(value_json(&Str::from_static("h264").into()), json!("h264"));
+
+        // A payload is not sent down the socket.
+        assert_eq!(value_json(&Value::none()), Json::Null);
+    }
+
+    #[test]
+    fn a_reading_goes_out_as_the_json_of_its_kind() {
+        assert_eq!(owned_json(&Owned::None), Json::Null);
+        assert_eq!(owned_json(&Owned::Uint(7)), json!(7));
+        assert_eq!(owned_json(&Owned::Str("a".into())), json!("a"));
+
+        // Bytes travel as how many, since the client cannot use them.
+        assert_eq!(owned_json(&Owned::Bytes(64)), json!({ "bytes": 64 }));
+
+        assert_eq!(
+            owned_json(&Owned::List(vec![Owned::Uint(1), Owned::Bool(false)])),
+            json!([1, false])
+        );
+    }
+
+    #[test]
+    fn a_type_is_named_as_the_desktop_knows_it() {
+        assert_eq!(type_name(&TYPE_U64), "uint");
+        assert_eq!(type_name(&TYPE_I32), "int");
+        assert_eq!(type_name(&TYPE_F64), "float");
+        assert_eq!(type_name(&TYPE_STRING), "string");
+        assert_eq!(type_name(&TYPE_BYTES), "bytes");
+    }
+
+    #[test]
+    fn a_missing_field_says_which_one() {
+        let params = json!({ "pipeline": 1 });
+
+        assert_eq!(field(&params, "plugin").unwrap_err(), "missing 'plugin'");
+        assert_eq!(as_usize(&params, "pipeline").unwrap(), 1);
+        assert_eq!(
+            as_usize(&json!({ "pipeline": "one" }), "pipeline").unwrap_err(),
+            "'pipeline' must be a number"
+        );
+    }
+
+    #[test]
+    fn a_wire_is_read_as_a_pair_of_paths() {
+        let params = json!({ "mappings": [[[4], [0]], [[1, 2], [0, 1]]] });
+
+        let mapper = as_mapper(&params, "mappings").expect("a mapper");
+
+        assert!(!mapper.is_empty());
+    }
+
+    #[test]
+    fn no_mappings_at_all_is_an_empty_mapper_rather_than_an_error() {
+        let mapper = as_mapper(&json!({}), "mappings").expect("an empty mapper");
+
+        assert!(mapper.is_empty());
+    }
+
+    #[test]
+    fn a_wire_that_is_not_a_pair_of_paths_is_refused() {
+        for bad in [
+            json!({ "mappings": [5] }),
+            json!({ "mappings": [[[0]]] }),
+            json!({ "mappings": [[["a"], [0]]] }),
+        ] {
+            assert!(as_mapper(&bad, "mappings").is_err(), "{bad}");
+        }
+    }
+
+    /// A single index is a path of one, which is how the desktop sends a flat
+    /// field.
+    #[test]
+    fn a_bare_index_is_a_path_of_one_step() {
+        assert_eq!(as_path(Some(&json!(3))).unwrap(), vec![3]);
+        assert_eq!(as_path(Some(&json!([3, 1]))).unwrap(), vec![3, 1]);
+        assert!(as_path(None).is_err());
+    }
+
+    #[test]
+    fn the_field_a_mapping_fills_is_read_the_same_way() {
+        assert_eq!(as_output(&json!({ "output": [1, 0] }), "output").unwrap(), vec![1, 0]);
+        assert!(as_output(&json!({}), "output").is_err());
+    }
+
+    /// Nothing moving means waiting longer, up to a point; a message moving
+    /// means waiting the least again.
+    #[test]
+    fn the_idle_wait_doubles_while_nothing_is_routed() {
+        let mut idle = ROUTE_INTERVAL;
+
+        for _ in 0..10 {
+            idle = backoff(idle, 0);
+        }
+
+        assert_eq!(idle, ROUTE_IDLE_MAX);
+        assert_eq!(backoff(idle, 1), ROUTE_INTERVAL);
+    }
+
+    #[test]
+    fn a_live_line_names_the_plugin_it_came_from() {
+        let lines = live_json(vec![("PLUG-1".to_string(), vec![Owned::Uint(3)])]);
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["type"], "live");
+        assert_eq!(lines[0]["plugin"], "PLUG-1");
+        assert_eq!(lines[0]["values"], json!([3]));
+    }
+
+    #[test]
+    fn an_event_line_names_the_event_it_was() {
+        let notice = Notice {
+            plugin_id: "PLUG-1".to_string(),
+            event: 2,
+            values: vec![Owned::Str("file.mp4".into())],
+        };
+
+        let line = notice_json(&notice);
+
+        assert_eq!(line["type"], "event");
+        assert_eq!(line["event"], 2);
+        assert_eq!(line["values"], json!(["file.mp4"]));
+    }
+
+    /// Everything the desktop draws a node from: its fields, their names and
+    /// what it answers to.
+    #[test]
+    fn a_library_is_described_field_by_field() {
+        use crate::runtime::fake::SINK;
+
+        let described = library_json("fake-plugin", &SINK);
+
+        assert_eq!(described["key"], "fake-plugin");
+        assert_eq!(described["name"], "fake");
+        assert_eq!(described["source"], false, "it takes an input, so it is no source");
+
+        let input = described["input"]["fields"].as_array().expect("its fields");
+
+        assert_eq!(input.len(), 2);
+        assert_eq!(input[0]["name"], "id");
+        assert_eq!(input[0]["type"], "uint");
+        assert_eq!(input[1]["name"], "name");
+        assert_eq!(input[1]["type"], "string");
+
+        // It produces nothing, which is said as null rather than left out.
+        assert_eq!(described["output"], Json::Null);
+
+        assert_eq!(described["events"][0]["name"], "happened");
+        assert_eq!(described["commands"][0]["name"], "do.it");
+    }
+
+    #[test]
+    fn a_plugin_that_takes_nothing_is_described_as_a_source() {
+        use crate::runtime::fake::SOURCE;
+
+        let described = library_json("fake-source", &SOURCE);
+
+        assert_eq!(described["source"], true);
+        assert_eq!(described["input"], Json::Null);
+        assert_eq!(described["output"]["fields"][0]["name"], "id");
+    }
+
+    #[test]
+    fn a_number_is_described_with_its_width_and_sign() {
+        let described = type_json(&TYPE_I32, 1);
+
+        assert_eq!(described["type"], "int");
+        assert_eq!(described["bits"], 32);
+        assert_eq!(described["signed"], true);
+
+        assert_eq!(type_json(&TYPE_U64, 1)["signed"], false);
+        assert_eq!(type_json(&TYPE_F64, 1)["bits"], 64);
+    }
+
+    #[test]
+    fn no_schema_is_described_as_nothing() {
+        assert_eq!(schema_json(std::ptr::null()), Json::Null);
+    }
+
+    /// What a client sends for set_parameter, on its way across the ABI.
+    #[test]
+    fn json_becomes_a_value_of_the_nearest_kind() {
+        let mut storage = Storage::default();
+
+        assert_eq!(storage.value(&json!(null)).unwrap().kind, ValueKind::ValueNone);
+        assert_eq!(storage.value(&json!(true)).unwrap().kind, ValueKind::ValueBool);
+        assert_eq!(storage.value(&json!(7)).unwrap().kind, ValueKind::ValueUint);
+        assert_eq!(storage.value(&json!(-7)).unwrap().kind, ValueKind::ValueInt);
+        assert_eq!(storage.value(&json!(0.5)).unwrap().kind, ValueKind::ValueFloat);
+    }
+
+    /// The value borrows the text, so whoever made it has to hold it until
+    /// the call is over.
+    #[test]
+    fn a_string_is_held_for_as_long_as_the_value_points_at_it() {
+        let mut storage = Storage::default();
+
+        let value = storage.value(&json!("/tmp/clip.mp4")).unwrap();
+
+        assert_eq!(
+            unsafe { value.get::<Str>().unwrap().as_str() },
+            "/tmp/clip.mp4"
+        );
+
+        // A second string does not move the first.
+        let other = storage.value(&json!("another")).unwrap();
+
+        assert_eq!(unsafe { value.get::<Str>().unwrap().as_str() }, "/tmp/clip.mp4");
+        assert_eq!(unsafe { other.get::<Str>().unwrap().as_str() }, "another");
+    }
+
+    #[test]
+    fn what_cannot_cross_the_abi_is_refused_rather_than_flattened() {
+        let mut storage = Storage::default();
+
+        assert!(storage.value(&json!([1, 2])).is_err());
+        assert!(storage.value(&json!({ "a": 1 })).is_err());
+    }
+
+    #[test]
+    fn the_socket_is_named_for_the_engine() {
+        assert!(socket_path().ends_with("mstu.sock"));
+    }
+
+    /// Only what moved, until the slow beat comes round and the whole picture
+    /// goes out again.
+    #[test]
+    fn news_is_only_what_changed_until_the_refresh() {
+        let _globals = crate::runtime::fake::globals();
+
+        let plugin = "PLUG-NEWS-TEST";
+
+        live::board().register(plugin, vec![crate::runtime::schema::Shape {
+            kind: ValueKind::ValueUint,
+            fields: None,
+            element: None,
+        }]);
+
+        let values = [1u64.into()];
+        live::board().publish(plugin, &Message {
+            values: Slice::from_raw_parts(values.as_ptr(), values.len()),
+        });
+
+        let mut reported = HashMap::new();
+        let mut refreshed = Instant::now();
+
+        let first = live_news(&mut reported, &mut refreshed);
+        assert!(first.iter().any(|line| line["plugin"] == plugin));
+
+        // Nothing moved since, so there is no news.
+        let second = live_news(&mut reported, &mut refreshed);
+        assert!(!second.iter().any(|line| line["plugin"] == plugin));
+
+        // Once the refresh is due, everything is said again.
+        let mut due = Instant::now() - LIVE_REFRESH;
+        let third = live_news(&mut reported, &mut due);
+
+        assert!(third.iter().any(|line| line["plugin"] == plugin));
+
+        live::board().forget(plugin);
+    }
+}

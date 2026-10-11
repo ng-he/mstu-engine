@@ -525,3 +525,16 @@ impl Drop for App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Str::empty` is a null pointer, which reading as text would follow.
+    #[test]
+    fn a_plugin_that_names_no_ui_folder_has_none() {
+        assert_eq!(optional_str(Str::empty()), None);
+        assert_eq!(optional_str(Str::from_static("")), None);
+        assert_eq!(optional_str(Str::from_static("media-ui")), Some("media-ui"));
+    }
+}

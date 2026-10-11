@@ -14,11 +14,16 @@ const SEARCH_DEPTH: usize = 4;
 /// Plugins are built in their own repositories and collected into one folder,
 /// which is rarely the one the engine is run from.
 fn plugin_dir() -> PathBuf {
-    if let Ok(dir) = env::var("MSTU_PLUGIN_DIR") {
+    let here = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    plugin_dir_from(&here, env::var("MSTU_PLUGIN_DIR").ok())
+}
+
+/// Where `plugin_dir` decides, given a place to start and what was asked for.
+fn plugin_dir_from(here: &Path, configured: Option<String>) -> PathBuf {
+    if let Some(dir) = configured {
         return PathBuf::from(dir);
     }
-
-    let here = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     here.ancestors()
         .take(SEARCH_DEPTH)
@@ -88,4 +93,83 @@ async fn main() -> Result<(), String> {
     log_info!("MSTU stopped");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    /// A tree of its own, taken away afterwards.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let path = env::temp_dir().join(format!("mstu-main-{}-{name}", std::process::id()));
+
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).expect("a directory to look in");
+
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn what_was_asked_for_wins() {
+        let asked = plugin_dir_from(Path::new("/anywhere"), Some("/opt/plugins".to_string()));
+
+        assert_eq!(asked, PathBuf::from("/opt/plugins"));
+    }
+
+    #[test]
+    fn the_folder_beside_the_engine_is_found_from_within_it() {
+        let root = Scratch::new("beside");
+        let plugins = root.0.join("plugins");
+
+        fs::create_dir_all(&plugins).expect("a plugins folder");
+        fs::create_dir_all(root.0.join("mstu-engine/src")).expect("an engine beside it");
+
+        // Started from inside the engine's own repository, as cargo run does.
+        let from = root.0.join("mstu-engine/src");
+
+        assert_eq!(plugin_dir_from(&from, None), plugins);
+    }
+
+    #[test]
+    fn the_nearest_one_is_the_one_taken() {
+        let root = Scratch::new("nearest");
+        let near = root.0.join("inner/plugins");
+
+        fs::create_dir_all(&near).expect("the near folder");
+        fs::create_dir_all(root.0.join("plugins")).expect("the far folder");
+
+        assert_eq!(plugin_dir_from(&root.0.join("inner"), None), near);
+    }
+
+    /// Four levels up and no further, so a stray folder near the root of the
+    /// disk is never taken for this project's.
+    #[test]
+    fn the_search_does_not_go_on_forever() {
+        let root = Scratch::new("depth");
+        let deep = root.0.join("a/b/c/d/e");
+
+        fs::create_dir_all(&deep).expect("somewhere deep");
+        fs::create_dir_all(root.0.join("plugins")).expect("a folder far above it");
+
+        assert_eq!(plugin_dir_from(&deep, None), deep.join("plugins"));
+    }
+
+    #[test]
+    fn with_nothing_to_find_it_names_where_it_looked() {
+        let root = Scratch::new("nothing");
+
+        assert_eq!(plugin_dir_from(&root.0, None), root.0.join("plugins"));
+    }
 }

@@ -115,3 +115,32 @@ macro_rules! log_warn {
 macro_rules! log_error {
     ($($arg:tt)*) => { $crate::log_at!(Error, $($arg)*) };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_level_crosses_the_abi_as_itself() {
+        assert_eq!(level_of(LogLevel::Trace), tracing::Level::TRACE);
+        assert_eq!(level_of(LogLevel::Debug), tracing::Level::DEBUG);
+        assert_eq!(level_of(LogLevel::Info), tracing::Level::INFO);
+        assert_eq!(level_of(LogLevel::Warn), tracing::Level::WARN);
+        assert_eq!(level_of(LogLevel::Error), tracing::Level::ERROR);
+    }
+
+    /// A plugin logging per sample asks this before formatting anything, so
+    /// it has to answer without one.
+    #[test]
+    fn whether_a_message_would_be_kept_can_be_asked_at_any_time() {
+        // No subscriber is installed here, so nothing is kept and nothing panics.
+        assert!(!enabled(LogLevel::Trace));
+        assert!(!enabled(LogLevel::Error));
+    }
+
+    #[test]
+    fn a_target_is_the_module_without_the_crate_in_front() {
+        assert_eq!(target("mstu_engine::runtime::pipeline"), "runtime::pipeline");
+        assert_eq!(target("somewhere::else"), "somewhere::else");
+    }
+}

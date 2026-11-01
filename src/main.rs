@@ -5,14 +5,18 @@ use mstu_engine::app::App;
 use mstu_engine::rpc;
 use mstu_engine::{log_error, log_info, log_warn, logging};
 
-/// How far up the tree a `plugins` folder is looked for.
+/// How far up the tree a plugin folder is looked for.
 const SEARCH_DEPTH: usize = 4;
 
+/// The folders a plugin folder is looked for under, nearest name first.
+const PLUGIN_DIRS: [&str; 2] = ["plugins", "build/plugins"];
+
 /// Where the plugins were collected: `MSTU_PLUGIN_DIR`, or the nearest
-/// `plugins` folder from here upwards.
+/// plugin folder from here upwards.
 ///
 /// Plugins are built in their own repositories and collected into one folder,
-/// which is rarely the one the engine is run from.
+/// which is rarely the one the engine is run from: a release puts them beside
+/// the engine, and collect.sh leaves them under `build` in a checkout.
 fn plugin_dir() -> PathBuf {
     let here = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
@@ -27,9 +31,9 @@ fn plugin_dir_from(here: &Path, configured: Option<String>) -> PathBuf {
 
     here.ancestors()
         .take(SEARCH_DEPTH)
-        .map(|at| at.join("plugins"))
+        .flat_map(|at| PLUGIN_DIRS.map(|name| at.join(name)))
         .find(|dir| dir.is_dir())
-        .unwrap_or_else(|| here.join("plugins"))
+        .unwrap_or_else(|| here.join(PLUGIN_DIRS[0]))
 }
 
 /// The name a library in the plugins folder is known by, or nothing if the
@@ -155,6 +159,32 @@ mod tests {
         let from = root.0.join("mstu-engine/src");
 
         assert_eq!(plugin_dir_from(&from, None), plugins);
+    }
+
+    /// Where collect.sh leaves them in a checkout, with nothing in `plugins`.
+    #[test]
+    fn the_folder_under_build_is_found_too() {
+        let root = Scratch::new("built");
+        let plugins = root.0.join("build/plugins");
+
+        fs::create_dir_all(&plugins).expect("a collected folder");
+        fs::create_dir_all(root.0.join("mstu-engine/src")).expect("an engine beside it");
+
+        let from = root.0.join("mstu-engine/src");
+
+        assert_eq!(plugin_dir_from(&from, None), plugins);
+    }
+
+    /// Both there, and `plugins` is the one a release ships.
+    #[test]
+    fn the_plain_folder_wins_at_the_same_level() {
+        let root = Scratch::new("both");
+        let plugins = root.0.join("plugins");
+
+        fs::create_dir_all(&plugins).expect("a plugins folder");
+        fs::create_dir_all(root.0.join("build/plugins")).expect("a collected one as well");
+
+        assert_eq!(plugin_dir_from(&root.0, None), plugins);
     }
 
     #[test]

@@ -10,7 +10,7 @@ use mstu_sdk::{
 };
 
 use crate::{
-    log_info, log_warn, logging,
+    library, log_info, log_warn, logging,
     runtime::{
         event::{self, Subscription},
         live,
@@ -82,7 +82,7 @@ impl App {
     /// The library is leaked on purpose: descriptors and worker tasks point
     /// into its code for as long as the process runs.
     pub fn load(&mut self, name: &str, path: &str) -> Result<()> {
-        let library = unsafe { Library::new(path) }.map_err(|err| err.to_string())?;
+        let library = unsafe { library::open(path) }.map_err(|err| err.to_string())?;
         let library: &'static Library = Box::leak(Box::new(library));
 
         let descriptor = unsafe {
